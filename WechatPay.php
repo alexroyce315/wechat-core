@@ -92,7 +92,7 @@ class Wechatpay {
     /**
      * Wechatpay::checkRequire()
      * 检查提交参数的必填项
-     * @param string $type
+     * @param string $type report/nativeOrder/unifiOrder/refund/bill/micropay
      * @param array() $data
      * @param bool $return
      * @return
@@ -104,6 +104,9 @@ class Wechatpay {
         switch($type){
             case 'report':
                 $requireContent = array('interface_url','return_code','result_code','user_ip','execute_time_');
+                break;
+            case 'nativeOrder':
+                $requireContent = array('prepay_id');
                 break;
             case 'unifiOrder':
             default:
@@ -117,34 +120,47 @@ class Wechatpay {
                 break;
             case 'micropay':
                 $requireContent = array('body', 'out_trade_no', 'total_fee', 'auth_code');
+                break;
         }
+        
+        $_temp  = array();
         
         foreach($requireContent as $key => $val){
             if(!isset($data[$val]) || '' == $data[$val]){
                 log_message('error', '缺少 '.$type.':'.$this->url.' 接口必填参数 '.$val.'!');
-                return;
+                die('缺少 '.$type.':'.$this->url.' 接口必填参数 '.$val.'!');
+            } else{
+                !$return || $_temp[$val]    = $data[$val];
             }
-            !$return || $return[$val]    = $data[$val];
         }
         
-        if($return) return $return;
+        if($return) return $_temp;
     }
     
-    // unifiedOrder
+	/**
+	 * Wechatpay::getPayUrl()
+	 * 生成微信扫码支付模式二的地址
+	 * @param mixed $data
+	 * @return
+	 */
+	public function getPayUrl($data){
+		// 生成签名，并提交 xml 到微信，解析返回的 xml
+        $data   = $this->getResult($this->createUnifiedOrderXml($data));
+        // 提取 prepay_id
+        return 'SUCCESS' === $data['result_code'] ? $data['code_url'] : FALSE;
+	}
+	
 	/**
 	 * Wechatpay::getPrepayId()
 	 * 获取 unifieOrder prepay_id
 	 * @param array $data 包含必传参数的数组
 	 * @return 预支付编号
 	 */
-	function getPrepayId($data){
+	public function getPrepayId($data){
         // 生成签名，并提交 xml 到微信，解析返回的 xml
-        $data   = $this->createUnifiedOrderXml($data);
-        $data   = $this->getResult($data);
-        log_message('debug', var_export($data, TRUE));
-        
+        $data   = $this->getResult($this->createUnifiedOrderXml($data));
         // 提取 prepay_id
-        return 'SUCCESS' === $data['return_code'] ? $data["prepay_id"] : FALSE;
+        return 'SUCCESS' === $data['result_code'] ? $data['prepay_id'] : FALSE;
 	}
     
 	/**
@@ -155,7 +171,7 @@ class Wechatpay {
 	 */
 	private function createUnifiedOrderXml($data = array()){
         if(empty($data)){
-            die(log_message('error', 'Error unifieOrder with empty data'));
+            die('Error unifieOrder with empty data');
         }
         
 		try{
@@ -163,38 +179,59 @@ class Wechatpay {
             $this->checkRequire('unifiOrder', $data);
             //foreach($this->requireBody as $key => $val){
             //    if(!isset($data[$val]) || '' == $data[$val]){
-            //        die(log_message('error', '缺少统一支付接口必填参数 '.$val.'!'));
+            //        die('缺少统一支付接口必填参数 '.$val.'!');
             //    }
             //}
             
             // JSAPI 下 openid 必填
             if('JSAPI' === $data['trade_type'] && (!isset($data['openid']) || '' == $data['openid'])){
-                die(log_message('error', '统一支付接口中，缺少必填参数 openid！trade_type 为 JSAPI 时，openid 为必填参数!'));
+                die('统一支付接口中，缺少必填参数 openid！trade_type 为 JSAPI 时，openid 为必填参数!');
             }
             
             // WAP 下 product_id 必填
             if('WAP' === $data['trade_type'] && (!isset($data['product_id']) || '' == $data['product_id'])){
-                die(log_message('error', '统一支付接口中，缺少必填参数 product_id！trade_type 为 WAP 时，product_id 为必填参数!'));
+                die('统一支付接口中，缺少必填参数 product_id！trade_type 为 WAP 时，product_id 为必填参数!');
             }
             
             $this->url  = 'https://api.mch.weixin.qq.com/pay/unifiedorder';
             
-            $parameter              = array_merge($data, array(
-                'appid'             => $this->appId,            // 公众账号 appId
-                'mch_id'            => $this->mchId,            // 商户号
+            $parameter              = array_merge($data, $this->getParameter(), array(
                 'notify_url'        => $this->nofityUrl,        // 通知异步回调地址
-                'spbill_create_ip'  => $_SERVER['REMOTE_ADDR'], // 终端 IP
-                'nonce_str'         => $this->getNoncestr()  // 32 位随机字符串
+                'spbill_create_ip'  => $_SERVER['REMOTE_ADDR'] // 终端 IP
             ));
             
             ksort($parameter);
             $parameter['sign']      = $this->getSign($parameter);// 签名
 		    return  $this->arrayToXml($parameter);
 		} catch (Exception $e){
-			die(log_message('error', var_export($e, TRUE)));
+			log_message('error', var_export($e, TRUE));
 		}
 	}
-    // end unifiedOrder
+    
+    /**
+     * Wechatpay::createNativeOrderXml()
+     * 生成响应微信扫码支付模式一的回调 xml 数据
+     * @param array $data
+     * @return
+     */
+    public function createNativeOrderXml($data = array()){
+        if(empty($data)){
+            die('Error nativeOrder with empty data');
+        }
+        
+        try{
+            $this->checkRequire('nativeOrder', $data);
+            $parameter  = array_merge($data, $this->getParameter(), array(
+                'return_code'   => 'SUCCESS',
+                'result_code'   => 'SUCCESS'
+            ));
+            ksort($parameter);
+            $parameter['sign']      = $this->getSign($parameter);// 签名
+		    return  $this->arrayToXml($parameter);
+        } catch (Exception $e){
+			log_message('error', var_export($e, TRUE));
+		}
+    }
 
 	/**
 	 * Wechatpay::orderQuery()
@@ -219,7 +256,7 @@ class Wechatpay {
             $this->reportCostTime(current_url(), $data, $startTimeStamp);
             return $data;
         } else{
-            die(log_message('error', '订单查询接口中，out_trade_no、transaction_id 至少填一个!'));
+            die('订单查询接口中，out_trade_no、transaction_id 至少填一个!');
         }
 	}
 	
@@ -274,7 +311,7 @@ class Wechatpay {
             $this->reportCostTime(current_url(), $data, $startTimeStamp);
             return $data;
         } else{
-            die(log_message('error', '退款申请接口中，out_trade_no、transaction_id 至少填一个!'));
+            die('退款申请接口中，out_trade_no、transaction_id 至少填一个!');
         }
 	}
 	
@@ -304,7 +341,7 @@ class Wechatpay {
             $this->reportCostTime(current_url(), $data, $startTimeStamp);
             return $data;
         } else{
-            die(log_message('error', '退款查询接口中，out_refund_no、out_trade_no、transaction_id、refund_id 至少填一个!'));
+            die('退款查询接口中，out_refund_no、out_trade_no、transaction_id、refund_id 至少填一个!');
         }
 	}
 	
@@ -325,8 +362,8 @@ class Wechatpay {
         $parameter              = array_merge($data, $this->getParameter());
         ksort($parameter);
         $parameter['sign']      = $this->getSign($parameter);
-        $data   = $this->getResult($this->arrayToXml($parameter));
-        return '<xml>' === substr($response, 0 , 5) ? '' : $data;
+        $data   = $this->postXmlCurl($this->arrayToXml($parameter), $this->curlTimeout);
+        return $data;
 	}
 	
 	/**
@@ -379,9 +416,21 @@ class Wechatpay {
             $this->reportCostTime(current_url(), $data, $startTimeStamp);
             return $data;
         } else{
-            die(log_message('error', '撤销订单API接口中，参数 out_trade_no和transaction_id 至少填一个!'));
+            die('撤销订单API接口中，参数 out_trade_no和transaction_id 至少填一个!');
         }
 	}
+    
+    public function getBizPayUrl($productId){
+        $parameter              = array_merge($this->getParameter(), array(
+            'product_id'    => $productId,
+            'time_stamp'    => time()
+        ));
+        ksort($parameter);
+        $parameter['sign']      = $this->getSign($parameter);
+        return $this->shortUrl(array(
+            'long_url'  => 'weixin://wxpay/bizpayurl?'.http_build_query($parameter)
+        ));
+    }
 	
 	/**
 	 * Wechatpay::bizpayurl()
@@ -397,12 +446,12 @@ class Wechatpay {
         //检测必填参数
         if(isset($data['product_id'])){
             $parameter              = array_merge($data, array(
-                'time'  => time()
+                //'time'  => time()
             ));
             ksort($parameter);
             return $this->getSign($parameter);
         } else{
-            die(log_message('error', '生成二维码，缺少必填参数 product_id!'));
+            die('生成二维码，缺少必填参数 product_id!');
         }
 	}
 	
@@ -411,28 +460,26 @@ class Wechatpay {
 	 * 转换短链接
 	 * 该接口主要用于扫码原生支付模式一中的二维码链接转成短链接(weixin://wxpay/s/XXXXXX)，
 	 * 减小二维码数据量，提升扫描速度和精确度。
-	 * appid、mchid、spbill_create_ip、nonce_str不需要填入
 	 * @param array $data
 	 * @param integer $timeOut
 	 * @return
 	 */
-	public function shorturl($data, $timeOut = 6){
+	public function shortUrl($data, $timeOut = 6){
 		$this->url = 'https://api.mch.weixin.qq.com/tools/shorturl';
         $this->curlTimeout  = $timeOut;
         
 		//检测必填参数
-        //检测必填参数
         if(isset($data['long_url'])){
-            $parameter              = array_merge($data);
+            $parameter              = array_merge($data, $this->getParameter());
             ksort($parameter);
             $parameter['sign']      = $this->getSign($parameter);
 		    $data = $this->arrayToXml($parameter);
             $startTimeStamp = $this->getMillisecond();
             $data   = $this->getResult($data);
             $this->reportCostTime(current_url(), $data, $startTimeStamp);
-            return $data;
+            return 'SUCCESS' === $data['return_code'] ? $data['short_url'] : $data['return_msg'];
         } else{
-            die(log_message('error', '需要转换的URL，签名用原串，传输需 URL encode!'));
+            die('需要转换的 URL，签名用原串，传输需 URL encode!');
         }
 	}
     
@@ -444,7 +491,6 @@ class Wechatpay {
 	 * @return
 	 */
 	public function getResult($xml, $ssl = TRUE){
-        log_message('debug', $xml);
         $data   = $ssl ? $this->postXmlSSLCurl($xml, $this->curlTimeout) : $this->postXmlCurl($xml, $this->curlTimeout);
 		return $this->xmlToArray($data);
 	}
@@ -528,7 +574,7 @@ class Wechatpay {
 	 * @param mixed $urlencode
 	 * @return
 	 */
-	private function formatBizQueryParaMap($paraMap, $urlencode){
+	public function formatBizQueryParaMap($paraMap, $urlencode = FALSE){
 		$buff = '';
 		ksort($paraMap);
 		foreach ($paraMap as $k => $v){
@@ -551,17 +597,13 @@ class Wechatpay {
 		//签名步骤一：按字典序排序参数
 		ksort($data);
 		$String = $this->formatBizQueryParaMap($data, FALSE);
-		//log_message('debug', '【string1】'.$String);
         // 检查 key 长度，截取前 32 位
         strlen($this->key) === 32 || $this->key = substr($this->key, 0, 32);
 		//签名步骤二：在string后加入KEY
 		$String = $String.'&key='.$this->key;
-		//log_message('debug', '【string2】'.$String);
 		//签名步骤三：MD5加密
 		$String = md5($String);
-		//log_message('debug', '【string3】'.$String);
 		//签名步骤四：所有字符转为大写
-		//log_message('debug', '【result】'.strtoupper($String));
         return strtoupper($String);
 	}
     
@@ -628,7 +670,7 @@ class Wechatpay {
 			return $data;
 		} else{ 
 			$error = curl_errno($ch);
-            die(log_message('error', 'curl出错，错误码 '.$error));
+            log_message('error', 'curl出错，错误码 '.$error);
 			curl_close($ch);
 			return TRUE;
 		}
@@ -674,7 +716,7 @@ class Wechatpay {
 		}
 		else { 
 			$error = curl_errno($ch);
-			die(log_message('error', 'curl出错，错误码 '.$error));
+			log_message('error', 'curl出错，错误码 '.$error);
 			curl_close($ch);
 			return false;
 		}
@@ -728,10 +770,10 @@ class Wechatpay {
 		//检测必填参数
         $this->checkRequire('report', $data, TRUE);
         
-        $parameter              = array_merge($input, $this->getParameter(), array(
-            'time'  => date("YmdHis"),
+        $parameter              = array_merge($data, $this->getParameter(), array(
+            'time'  => date("YmdHis")
         ));
-        unset($input);
+        unset($data);
         unset($parameter['appid']);
         ksort($parameter);
         $parameter['sign']      = $this->getSign($parameter);// 签名
