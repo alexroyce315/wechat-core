@@ -160,7 +160,14 @@ class Wechatpay {
         // 生成签名，并提交 xml 到微信，解析返回的 xml
         $data   = $this->getResult($this->createUnifiedOrderXml($data));
         // 提取 prepay_id
-        return 'SUCCESS' === $data['result_code'] ? $data['prepay_id'] : FALSE;
+        // 2015.12.14 解决针对已支付订单的处理
+        if('OK' === $data['return_msg']){
+            return 'SUCCESS' === $data['result_code'] ? $data['prepay_id'] : array(
+                'result'    => 'PAYED'
+            );
+        } else{
+            return FALSE;
+        }
 	}
     
 	/**
